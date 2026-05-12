@@ -1,11 +1,9 @@
 import express from 'express';
-import { getCommentsForPost, createComment, deleteComment } from '../controllers/commentController.js';
-import { authMiddleware } from '../middleware/authMiddleware.js';
+import { signup, login } from '../controllers/authController.js';
 
 const router = express.Router();
 
-router.get('/:postId', getCommentsForPost);
-router.post('/:postId', authMiddleware, createComment);
-router.delete('/:id', authMiddleware, deleteComment);
+router.post('/register', signup);
+router.post('/login', login);
 
 export default router;

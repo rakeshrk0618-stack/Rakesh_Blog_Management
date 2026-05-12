@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { authMiddleware } from '../middleware/authMiddleware.js';
+import { signup, login } from '../controllers/authController.js';
 
+// Mock supabase before any imports resolve
 vi.mock('../config/supabase.js', () => ({
   supabase: {
     auth: {
-      getUser: vi.fn(),
+      signUp: vi.fn(),
+      signInWithPassword: vi.fn(),
     },
   },
 }));
@@ -27,69 +29,94 @@ function makeRes() {
   return res;
 }
 
-describe('authMiddleware', () => {
+describe('authController – signup', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns 401 when Authorization header is missing', async () => {
-    const req = { headers: {} };
+  it('returns 400 when email is invalid', async () => {
+    const req = { body: { email: 'not-an-email', password: 'password123' } };
     const res = makeRes();
-    const next = vi.fn();
-    await authMiddleware(req, res, next);
-    expect(res.statusCode).toBe(401);
-    expect(res.body.error).toBe('No token provided');
-    expect(next).not.toHaveBeenCalled();
+    await signup(req, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/invalid email/i);
   });
 
-  it('returns 401 when token is invalid', async () => {
-    supabase.auth.getUser.mockResolvedValueOnce({
-      data: { user: null },
-      error: { message: 'Invalid token' },
-    });
-    const req = { headers: { authorization: 'Bearer bad-token' } };
+  it('returns 400 when password is too short', async () => {
+    const req = { body: { email: 'user@example.com', password: '123' } };
     const res = makeRes();
-    const next = vi.fn();
-    await authMiddleware(req, res, next);
-    expect(res.statusCode).toBe(401);
-    expect(res.body.error).toBe('Unauthorized');
-    expect(next).not.toHaveBeenCalled();
+    await signup(req, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/at least 6 characters/i);
   });
 
-  it('returns 401 when user is null without error', async () => {
-    supabase.auth.getUser.mockResolvedValueOnce({
-      data: { user: null },
+  it('returns 201 on successful signup', async () => {
+    supabase.auth.signUp.mockResolvedValueOnce({
+      data: { user: { id: 'uid-1' } },
       error: null,
     });
-    const req = { headers: { authorization: 'Bearer some-token' } };
+    const req = { body: { email: 'user@example.com', password: 'password123' } };
     const res = makeRes();
-    const next = vi.fn();
-    await authMiddleware(req, res, next);
-    expect(res.statusCode).toBe(401);
-    expect(res.body.error).toBe('Unauthorized');
-    expect(next).not.toHaveBeenCalled();
+    await signup(req, res);
+    expect(res.statusCode).toBe(201);
+    expect(res.body.message).toBe('User created successfully');
   });
 
-  it('attaches user and calls next() when token is valid', async () => {
-    const mockUser = { id: 'uid-1', email: 'user@example.com' };
-    supabase.auth.getUser.mockResolvedValueOnce({
-      data: { user: mockUser },
+  it('returns 400 when supabase returns an error', async () => {
+    supabase.auth.signUp.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'Email already registered' },
+    });
+    const req = { body: { email: 'user@example.com', password: 'password123' } };
+    const res = makeRes();
+    await signup(req, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('Email already registered');
+  });
+});
+
+describe('authController – login', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 400 when email is invalid', async () => {
+    const req = { body: { email: 'bad-email', password: 'password123' } };
+    const res = makeRes();
+    await login(req, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/invalid email/i);
+  });
+
+  it('returns 400 when password is too short', async () => {
+    const req = { body: { email: 'user@example.com', password: 'abc' } };
+    const res = makeRes();
+    await login(req, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/at least 6 characters/i);
+  });
+
+  it('returns 200 with token on successful login', async () => {
+    supabase.auth.signInWithPassword.mockResolvedValueOnce({
+      data: {
+        session: { access_token: 'tok-abc' },
+        user: { id: 'uid-1', email: 'user@example.com' },
+      },
       error: null,
     });
-    const req = { headers: { authorization: 'Bearer valid-token' } };
+    const req = { body: { email: 'user@example.com', password: 'password123' } };
     const res = makeRes();
-    const next = vi.fn();
-    await authMiddleware(req, res, next);
-    expect(req.user).toEqual(mockUser);
-    expect(next).toHaveBeenCalledOnce();
+    await login(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.token).toBe('tok-abc');
+    expect(res.body.message).toBe('Login successful');
   });
 
-  it('returns 500 when supabase.auth.getUser throws', async () => {
-    supabase.auth.getUser.mockRejectedValueOnce(new Error('Network error'));
-    const req = { headers: { authorization: 'Bearer some-token' } };
+  it('returns 401 when supabase returns an error', async () => {
+    supabase.auth.signInWithPassword.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'Invalid login credentials' },
+    });
+    const req = { body: { email: 'user@example.com', password: 'wrongpass' } };
     const res = makeRes();
-    const next = vi.fn();
-    await authMiddleware(req, res, next);
-    expect(res.statusCode).toBe(500);
-    expect(res.body.error).toBe('Server error in auth middleware');
-    expect(next).not.toHaveBeenCalled();
+    await login(req, res);
+    expect(res.statusCode).toBe(401);
+    expect(res.body.error).toBe('Invalid login credentials');
   });
 });
